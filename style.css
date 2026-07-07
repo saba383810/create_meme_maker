@@ -213,6 +213,23 @@ main {
 .tpl-item:hover .tpl-del { opacity: 1; }
 .tpl-item .tpl-del:hover { color: var(--danger); background: rgba(240, 103, 103, 0.12); }
 
+#presetSection { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--border); }
+#presetSection code {
+  background: var(--panel-2);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-size: 10.5px;
+}
+.tpl-item .tpl-badge {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--accent-hover);
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 2px 5px;
+  flex-shrink: 0;
+}
+
 /* ---------- キャンバス ---------- */
 #canvasWrap {
   position: relative;

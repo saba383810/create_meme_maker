@@ -804,6 +804,84 @@ function toast(msg, isError = false) {
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2600);
 }
 
+// ---------------- プリセット（templates/manifest.json） ----------------
+
+const presetSection = document.getElementById('presetSection');
+const presetListEl = document.getElementById('presetList');
+
+async function loadPresets() {
+  // file:// 直開きなど fetch できない環境では黙ってスキップ
+  let manifest;
+  try {
+    const res = await fetch('templates/manifest.json', { cache: 'no-cache' });
+    if (!res.ok) return;
+    manifest = await res.json();
+  } catch {
+    return;
+  }
+  const presets = (manifest.templates || []).filter(p => p && p.file);
+  if (presets.length === 0) return;
+
+  presetSection.hidden = false;
+  presetListEl.innerHTML = '';
+  for (const preset of presets) {
+    const item = document.createElement('div');
+    item.className = 'tpl-item';
+
+    const img = document.createElement('img');
+    img.src = 'templates/' + encodeURIComponent(preset.file);
+    img.alt = '';
+    img.loading = 'lazy';
+
+    const name = document.createElement('span');
+    name.className = 'tpl-name';
+    name.textContent = preset.name || preset.file.replace(/\.[^.]+$/, '');
+
+    const badge = document.createElement('span');
+    badge.className = 'tpl-badge';
+    badge.textContent = 'preset';
+
+    item.append(img, name, badge);
+    item.addEventListener('click', () => importPreset(preset));
+    presetListEl.appendChild(item);
+  }
+}
+
+async function importPreset(preset) {
+  const id = 'preset:' + preset.file;
+  // 取り込み済みならそれを開く（枠レイアウトを保持）
+  if (state.templates.some(t => t.id === id)) {
+    await loadTemplate(id);
+    return;
+  }
+  let blob;
+  try {
+    const res = await fetch('templates/' + encodeURIComponent(preset.file));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    blob = await res.blob();
+  } catch (err) {
+    toast('プリセットの取得に失敗しました: ' + err.message, true);
+    return;
+  }
+  const tpl = {
+    id,
+    name: preset.name || preset.file.replace(/\.[^.]+$/, ''),
+    imageBlob: blob,
+    boxes: [],
+    updatedAt: Date.now(),
+  };
+  try {
+    await dbPut(tpl);
+  } catch (err) {
+    toast('保存に失敗しました: ' + err.message, true);
+    return;
+  }
+  state.templates.unshift(tpl);
+  renderTemplateList();
+  await loadTemplate(id);
+  toast(`プリセット「${tpl.name}」を取り込みました`);
+}
+
 // ---------------- 初期化 ----------------
 
 (async function init() {
@@ -815,4 +893,5 @@ function toast(msg, isError = false) {
   } catch (err) {
     toast('初期化に失敗しました: ' + err.message, true);
   }
+  loadPresets();
 })();
