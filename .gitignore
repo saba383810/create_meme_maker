@@ -1,0 +1,11 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# エディタ
+.idea/
+.vscode/
+*.swp
+
+# 出力したミーム画像を置く場合はこの下に（例: output/）
+output/

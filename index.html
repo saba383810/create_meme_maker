@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>クソミーム・メーカー</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="logo">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+      <rect x="2" y="3" width="20" height="18" rx="3" stroke="currentColor" stroke-width="2"/>
+      <path d="M6 15l3.5-4 2.5 3 2-2.5L18 15" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/>
+    </svg>
+    <span>クソミーム・メーカー</span>
+  </div>
+  <div class="header-center">
+    <input type="text" id="tplName" placeholder="テンプレート未選択" disabled>
+    <span id="saveStatus"></span>
+  </div>
+  <div class="header-actions">
+    <button id="btnCopy" class="btn" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="12" height="12" rx="2" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="2"/></svg>
+      コピー
+    </button>
+    <button id="btnSave" class="btn primary" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      PNG保存
+    </button>
+  </div>
+</header>
+
+<main>
+  <!-- 左: テンプレート一覧 -->
+  <aside class="panel" id="leftPanel">
+    <div class="panel-head">
+      <h2>テンプレート</h2>
+      <label class="btn small" for="fileInput">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+        追加
+      </label>
+      <input type="file" id="fileInput" accept="image/*" multiple hidden>
+    </div>
+    <p class="hint">画像のドラッグ&ドロップ、<kbd>Ctrl</kbd>+<kbd>V</kbd> でも追加できます</p>
+    <div id="templateList"></div>
+  </aside>
+
+  <!-- 中央: キャンバス -->
+  <section id="canvasWrap">
+    <canvas id="canvas"></canvas>
+    <div id="emptyState">
+      <svg width="56" height="56" viewBox="0 0 24 24" fill="none" opacity="0.5">
+        <rect x="2" y="3" width="20" height="18" rx="3" stroke="currentColor" stroke-width="1.5"/>
+        <path d="M6 15l3.5-4 2.5 3 2-2.5L18 15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="8.5" cy="8.5" r="1.5" fill="currentColor"/>
+      </svg>
+      <p>テンプレート画像を追加してください</p>
+      <p class="sub">左上の「追加」ボタン／ドラッグ&ドロップ／<kbd>Ctrl</kbd>+<kbd>V</kbd></p>
+    </div>
+  </section>
+
+  <!-- 右: テキスト枠の編集 -->
+  <aside class="panel" id="rightPanel">
+    <div class="panel-head">
+      <h2>テキスト枠</h2>
+      <button id="btnAddBox" class="btn small" disabled>
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>
+        枠を追加
+      </button>
+    </div>
+    <p class="hint">画像の上をドラッグして枠を作成。ドラッグで移動、四隅でサイズ変更、<kbd>Delete</kbd> で削除、矢印キーで微調整。</p>
+    <div id="boxList"></div>
+  </aside>
+</main>
+
+<div id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
