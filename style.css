@@ -423,3 +423,101 @@ main {
 ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 5px; }
 ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------- モバイル用タブバー（デスクトップでは非表示） ---------- */
+.mobile-tabs { display: none; }
+
+/* ============================================================
+   レスポンシブ: スマホ・タブレット
+   ============================================================ */
+@media (max-width: 820px) {
+  body {
+    height: 100vh;
+    height: 100dvh;
+  }
+
+  /* ヘッダーを圧縮 */
+  header {
+    gap: 8px;
+    padding: 0 10px;
+    height: 48px;
+  }
+  .logo { font-size: 13px; gap: 7px; }
+  .header-center {
+    flex: 1;
+    justify-content: flex-start;
+    gap: 6px;
+  }
+  #tplName {
+    width: auto;
+    flex: 1;
+    min-width: 0;
+    padding: 6px 8px;
+    font-size: 13px;
+  }
+  #saveStatus { display: none; }
+  .header-actions { gap: 6px; }
+  .btn { padding: 7px 11px; }
+
+  /* 3カラムグリッド → 縦積み（キャンバスを最上部に固定表示） */
+  main {
+    display: flex;
+    flex-direction: column;
+  }
+  #canvasWrap {
+    order: 1;
+    flex: 0 0 42dvh;
+    min-height: 0;
+    padding: 14px;
+  }
+  .mobile-tabs {
+    order: 2;
+    display: flex;
+    flex: 0 0 auto;
+    background: var(--panel);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+  .mobile-tabs button {
+    flex: 1;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    padding: 12px 0;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+  }
+  .mobile-tabs button.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+
+  /* パネル: タブで片方だけ表示（既定はテンプレート） */
+  #leftPanel, #rightPanel {
+    order: 3;
+    flex: 1 1 auto;
+    min-height: 0;
+    border-left: none;
+    border-right: none;
+  }
+  #rightPanel { display: none; }
+  body.m-tab-boxes #leftPanel { display: none; }
+  body.m-tab-boxes #rightPanel { display: block; }
+
+  /* テキスト枠コントロールを1列に */
+  .box-controls { grid-template-columns: 1fr; }
+}
+
+/* ごく狭い画面（小型スマホ）: さらに詰める */
+@media (max-width: 560px) {
+  .logo span { display: none; }
+  /* ヘッダーのアクションはアイコンのみ（横はみ出し防止） */
+  .header-actions .btn-label { display: none; }
+  .header-actions .btn { padding: 8px 10px; gap: 0; }
+  #canvasWrap { flex-basis: 38dvh; padding: 10px; }
+}

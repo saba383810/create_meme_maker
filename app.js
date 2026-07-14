@@ -243,6 +243,9 @@ function drawVerticalText(b) {
 
 // --- 選択UI ---
 
+// タッチ端末（粗いポインタ）ではハンドルの当たり判定・見た目を大きめに
+const COARSE_POINTER = window.matchMedia('(pointer: coarse)').matches;
+
 function displayScale() {
   const rect = canvas.getBoundingClientRect();
   return rect.width > 0 ? canvas.width / rect.width : 1;
@@ -265,7 +268,7 @@ function drawSelectionUI(b) {
   ctx.setLineDash([5 * s, 4 * s]);
   ctx.strokeRect(b.x, b.y, b.w, b.h);
   ctx.setLineDash([]);
-  const r = 5 * s;
+  const r = (COARSE_POINTER ? 7 : 5) * s;
   for (const h of handlePositions(b)) {
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
@@ -515,6 +518,7 @@ function addBoxCentered() {
   renderBoxList();
   scheduleRender();
   autoSave();
+  setMobileTab('boxes');
   focusSelectedTextarea();
 }
 
@@ -544,7 +548,7 @@ function canvasPos(e) {
 }
 
 function hitHandle(b, p) {
-  const tol = 10 * displayScale();
+  const tol = (COARSE_POINTER ? 18 : 10) * displayScale();
   for (const h of handlePositions(b)) {
     if (Math.hypot(p.x - h.x, p.y - h.y) <= tol) return h.pos;
   }
@@ -654,6 +658,7 @@ canvas.addEventListener('pointerup', e => {
     renderBoxList();
     scheduleRender();
     autoSave();
+    setMobileTab('boxes');
     focusSelectedTextarea();
     return;
   }
@@ -794,6 +799,18 @@ tplNameInput.addEventListener('input', () => {
 });
 
 btnAddBox.addEventListener('click', addBoxCentered);
+
+// ---------------- モバイル用パネル切替タブ ----------------
+const mobileTabsEl = document.getElementById('mobileTabs');
+function setMobileTab(which) {
+  document.body.classList.toggle('m-tab-boxes', which === 'boxes');
+  document.body.classList.toggle('m-tab-templates', which === 'templates');
+  mobileTabsEl.querySelectorAll('button').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === which));
+}
+mobileTabsEl.querySelectorAll('button').forEach(b =>
+  b.addEventListener('click', () => setMobileTab(b.dataset.tab)));
+setMobileTab('templates');
 
 let toastTimer = null;
 function toast(msg, isError = false) {

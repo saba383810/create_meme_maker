@@ -23,11 +23,11 @@
   <div class="header-actions">
     <button id="btnCopy" class="btn" disabled>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><rect x="9" y="9" width="12" height="12" rx="2" stroke="currentColor" stroke-width="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" stroke="currentColor" stroke-width="2"/></svg>
-      コピー
+      <span class="btn-label">コピー</span>
     </button>
     <button id="btnSave" class="btn primary" disabled>
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M12 3v12m0 0l-4-4m4 4l4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-      PNG保存
+      <span class="btn-label">PNG保存</span>
     </button>
   </div>
 </header>
@@ -67,6 +67,12 @@
       <p class="sub">左上の「追加」ボタン／ドラッグ&ドロップ／<kbd>Ctrl</kbd>+<kbd>V</kbd></p>
     </div>
   </section>
+
+  <!-- モバイル用パネル切替タブ（スマホ幅でのみ表示） -->
+  <nav class="mobile-tabs" id="mobileTabs">
+    <button type="button" data-tab="templates">テンプレート</button>
+    <button type="button" data-tab="boxes">テキスト枠</button>
+  </nav>
 
   <!-- 右: テキスト枠の編集 -->
   <aside class="panel" id="rightPanel">
