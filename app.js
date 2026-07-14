@@ -341,7 +341,7 @@ async function loadTemplate(id) {
   saveStatusEl.textContent = '';
 
   renderTemplateList();
-  renderBoxList();
+  renderEditor();
   render();
 }
 
@@ -368,7 +368,7 @@ async function deleteTemplate(id) {
     btnAddBox.disabled = true;
     btnSave.disabled = true;
     btnCopy.disabled = true;
-    renderBoxList();
+    renderEditor();
     if (state.templates.length > 0) await loadTemplate(state.templates[0].id);
   }
   renderTemplateList();
@@ -502,6 +502,208 @@ function updateBoxSelection() {
   for (const el of boxListEl.querySelectorAll('.box-item')) {
     el.classList.toggle('selected', el.dataset.boxId === state.selectedId);
   }
+  syncMobileSelection();
+}
+
+// デスクトップの右パネルとスマホのボトムエディタを両方更新
+function renderEditor() {
+  renderBoxList();
+  renderMobileEditor();
+}
+
+// ---------------- テキスト枠エディタ（スマホ用ボトムツールバー） ----------------
+
+const mobileEditorEl = document.getElementById('mobileEditor');
+let meOpenTool = null; // スマホエディタで開いているツール
+
+const ME_ICONS = {
+  size: '<svg viewBox="0 0 24 24"><path d="M4 19 9 5l5 14M6 14h6"/><path d="M18 8v9M15.5 10.5 18 8l2.5 2.5M15.5 14.5 18 17l2.5-2.5"/></svg>',
+  font: '<svg viewBox="0 0 24 24"><path d="M5 6h14M12 6v13M9 19h6"/></svg>',
+  color: '<svg viewBox="0 0 24 24"><path d="M12 3C8 9 6 12 6 15a6 6 0 0 0 12 0c0-3-2-6-6-12z"/></svg>',
+  align: '<svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h16"/></svg>',
+  del: '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+};
+
+// スマホエディタが今表示している枠。選択が変わった時だけ作り直す。
+let meShownId = null;
+
+function renderMobileEditor() {
+  if (!mobileEditorEl) return;
+  mobileEditorEl.innerHTML = '';
+  meShownId = state.selectedId;
+  if (!state.img) return;
+
+  // 枠切替バー（横スクロールのチップ + 追加）
+  const bar = document.createElement('div');
+  bar.className = 'me-boxbar';
+  state.boxes.forEach((b, i) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'me-chip' + (b.id === state.selectedId ? ' active' : '');
+    const label = (b.text || '').trim().split('\n')[0].slice(0, 6);
+    chip.textContent = label ? `${i + 1}. ${label}` : `枠${i + 1}`;
+    chip.addEventListener('click', () => {
+      state.selectedId = b.id;
+      updateBoxSelection();
+      scheduleRender();
+    });
+    bar.appendChild(chip);
+  });
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'me-add';
+  add.setAttribute('aria-label', '枠を追加');
+  add.textContent = '＋';
+  add.addEventListener('click', addBoxCentered);
+  bar.appendChild(add);
+  mobileEditorEl.appendChild(bar);
+
+  const sel = getSelected();
+  if (!sel) {
+    const empty = document.createElement('div');
+    empty.className = 'me-empty';
+    empty.innerHTML = state.boxes.length
+      ? '上のバーで枠を選ぶか、<br>キャンバスの枠をタップしてください。'
+      : 'テキスト枠がありません。<br>キャンバスをドラッグ／上の ＋ で追加。';
+    mobileEditorEl.appendChild(empty);
+    return;
+  }
+
+  // テキスト入力
+  const ta = document.createElement('textarea');
+  ta.className = 'me-text';
+  ta.placeholder = 'テキストを入力';
+  ta.value = sel.text;
+  ta.addEventListener('input', () => { sel.text = ta.value; scheduleRender(); autoSave(); });
+  ta.addEventListener('focus', () => setTool(null));
+  mobileEditorEl.appendChild(ta);
+
+  // ポップオーバー（ツールの詳細設定。開いた時だけ中身を作る）
+  const pop = document.createElement('div');
+  pop.className = 'me-popover';
+  pop.hidden = true;
+  mobileEditorEl.appendChild(pop);
+
+  // ボトムツールバー
+  const tb = document.createElement('div');
+  tb.className = 'me-toolbar';
+  const tools = [
+    { key: 'size', label: 'サイズ' },
+    { key: 'font', label: 'フォント' },
+    { key: 'color', label: '色' },
+    { key: 'align', label: '配置' },
+    { key: 'del', label: '削除', danger: true },
+  ];
+  const toolBtns = {};
+  tools.forEach(t => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'me-tool' + (t.danger ? ' danger' : '');
+    btn.dataset.tool = t.key;
+    btn.innerHTML = `<span class="me-tool-ico">${ME_ICONS[t.key]}</span><span class="me-tool-label">${t.label}</span>`;
+    btn.addEventListener('click', () => {
+      if (t.key === 'del') { setTool(null); deleteBox(sel.id); return; }
+      setTool(meOpenTool === t.key ? null : t.key);
+    });
+    toolBtns[t.key] = btn;
+    tb.appendChild(btn);
+  });
+  mobileEditorEl.appendChild(tb);
+
+  const upd = () => { scheduleRender(); autoSave(); };
+
+  function setTool(key) {
+    meOpenTool = key;
+    for (const k of Object.keys(toolBtns)) toolBtns[k].classList.toggle('active', k === key);
+    if (!key) { pop.hidden = true; pop.innerHTML = ''; return; }
+    pop.innerHTML = buildPopover(key, sel);
+    wirePopover(key, pop, sel, upd);
+    pop.hidden = false;
+  }
+
+  meOpenTool = null;
+}
+
+function buildPopover(key, b) {
+  if (key === 'size') {
+    return `<div class="me-pop-title">文字サイズ</div>
+      <div class="me-row">
+        <button type="button" class="me-step" data-d="-2">−</button>
+        <input type="range" class="me-range" min="8" max="160" value="${Math.min(160, b.fontSize)}">
+        <button type="button" class="me-step" data-d="2">＋</button>
+        <span class="me-val">${b.fontSize}</span>
+      </div>`;
+  }
+  if (key === 'font') {
+    return `<div class="me-pop-title">フォント</div>
+      <div class="me-row">
+        <select class="me-font">${Object.keys(FONTS).map(k =>
+          `<option value="${k}" ${b.font === k ? 'selected' : ''}>${FONT_LABELS[k]}</option>`).join('')}</select>
+        <label class="me-check"><input type="checkbox" class="me-bold" ${b.bold ? 'checked' : ''}><span>太字</span></label>
+      </div>`;
+  }
+  if (key === 'color') {
+    return `<div class="me-pop-title">色</div>
+      <div class="me-row"><span class="me-row-label">文字色</span><input type="color" class="me-color" value="${b.color}"></div>
+      <div class="me-row"><label class="me-check"><input type="checkbox" class="me-bgon" ${b.bg ? 'checked' : ''}><span>背景</span></label><input type="color" class="me-bgcolor" value="${b.bgColor}"></div>
+      <div class="me-row"><label class="me-check"><input type="checkbox" class="me-olon" ${b.outline ? 'checked' : ''}><span>縁取り</span></label><input type="color" class="me-olcolor" value="${b.outlineColor}"></div>`;
+  }
+  if (key === 'align') {
+    return `<div class="me-pop-title">配置</div>
+      <div class="me-row"><label class="me-check"><input type="checkbox" class="me-vertical" ${b.vertical ? 'checked' : ''}><span>縦書き</span></label></div>
+      <div class="me-row"><div class="me-seg${b.vertical ? ' disabled' : ''}">
+        <button type="button" data-a="left" class="${b.align === 'left' ? 'active' : ''}">左</button>
+        <button type="button" data-a="center" class="${b.align === 'center' ? 'active' : ''}">中央</button>
+        <button type="button" data-a="right" class="${b.align === 'right' ? 'active' : ''}">右</button>
+      </div></div>`;
+  }
+  return '';
+}
+
+function wirePopover(key, pop, b, upd) {
+  const q = s => pop.querySelector(s);
+  if (key === 'size') {
+    const range = q('.me-range'), val = q('.me-val');
+    const apply = v => { b.fontSize = Math.max(8, Math.min(300, Math.round(v))); val.textContent = b.fontSize; range.value = Math.min(160, b.fontSize); upd(); };
+    range.addEventListener('input', () => apply(Number(range.value)));
+    pop.querySelectorAll('.me-step').forEach(s =>
+      s.addEventListener('click', () => apply(b.fontSize + Number(s.dataset.d))));
+  } else if (key === 'font') {
+    q('.me-font').addEventListener('change', e => { b.font = e.target.value; upd(); });
+    q('.me-bold').addEventListener('change', e => { b.bold = e.target.checked; upd(); });
+  } else if (key === 'color') {
+    q('.me-color').addEventListener('input', e => { b.color = e.target.value; upd(); });
+    q('.me-bgon').addEventListener('change', e => { b.bg = e.target.checked; upd(); });
+    q('.me-bgcolor').addEventListener('input', e => { b.bgColor = e.target.value; b.bg = true; q('.me-bgon').checked = true; upd(); });
+    q('.me-olon').addEventListener('change', e => { b.outline = e.target.checked; upd(); });
+    q('.me-olcolor').addEventListener('input', e => { b.outline = true; q('.me-olon').checked = true; b.outlineColor = e.target.value; upd(); });
+  } else if (key === 'align') {
+    const seg = q('.me-seg');
+    q('.me-vertical').addEventListener('change', e => {
+      b.vertical = e.target.checked;
+      seg.classList.toggle('disabled', b.vertical);
+      upd();
+    });
+    seg.querySelectorAll('button').forEach(btn =>
+      btn.addEventListener('click', () => {
+        if (b.vertical) return;
+        b.align = btn.dataset.a;
+        seg.querySelectorAll('button').forEach(x => x.classList.toggle('active', x === btn));
+        upd();
+      }));
+  }
+}
+
+// 選択が変わった時にスマホエディタを追従（テキスト入力中は作り直さない）
+function syncMobileSelection() {
+  if (!mobileEditorEl) return;
+  if (state.selectedId === meShownId) {
+    // 同じ枠 → チップのハイライトだけ更新（フォーカス維持）
+    mobileEditorEl.querySelectorAll('.me-chip').forEach((c, i) =>
+      c.classList.toggle('active', state.boxes[i] && state.boxes[i].id === state.selectedId));
+    return;
+  }
+  renderMobileEditor();
 }
 
 function escapeHTML(s) {
@@ -515,7 +717,7 @@ function addBoxCentered() {
   const box = newBox(Math.round((canvas.width - w) / 2), Math.round((canvas.height - h) / 2), w, h);
   state.boxes.push(box);
   state.selectedId = box.id;
-  renderBoxList();
+  renderEditor();
   scheduleRender();
   autoSave();
   setMobileTab('boxes');
@@ -525,7 +727,7 @@ function addBoxCentered() {
 function deleteBox(id) {
   state.boxes = state.boxes.filter(b => b.id !== id);
   if (state.selectedId === id) state.selectedId = null;
-  renderBoxList();
+  renderEditor();
   scheduleRender();
   autoSave();
 }
@@ -655,7 +857,7 @@ canvas.addEventListener('pointerup', e => {
       return;
     }
     box.fontSize = Math.max(12, Math.round(box.h * 0.35));
-    renderBoxList();
+    renderEditor();
     scheduleRender();
     autoSave();
     setMobileTab('boxes');
