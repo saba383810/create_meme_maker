@@ -2,8 +2,9 @@
 
 /* ================================================================
  * クソミーム・メーカー
- * テンプレート画像にテキスト枠を重ねてPNG出力するローカルGUIツール。
+ * えらぶ → つくる → できた の3ステップでミーム画像を作るローカルツール。
  * データはブラウザの IndexedDB に保存される（サーバー不要）。
+ * スマホ・PCで共通の単一UI。
  * ================================================================ */
 
 // ---------------- IndexedDB ----------------
@@ -60,6 +61,9 @@ const state = {
   selectedId: null,
 };
 
+let mode = 'pick'; // 'pick' | 'edit' | 'done'
+let presets = [];  // templates/manifest.json の内容
+
 const FONTS = {
   gothic: '"Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", Meiryo, sans-serif',
   mincho: '"Hiragino Mincho ProN", "Yu Mincho", "MS PMincho", serif',
@@ -97,21 +101,57 @@ function getSelected() {
 
 // ---------------- DOM ----------------
 
-const canvas = document.getElementById('canvas');
+const $ = id => document.getElementById(id);
+const canvas = $('canvas');
 const ctx = canvas.getContext('2d');
-const canvasWrap = document.getElementById('canvasWrap');
-const emptyState = document.getElementById('emptyState');
-const templateListEl = document.getElementById('templateList');
-const boxListEl = document.getElementById('boxList');
-const tplNameInput = document.getElementById('tplName');
-const saveStatusEl = document.getElementById('saveStatus');
-const fileInput = document.getElementById('fileInput');
-const btnAddBox = document.getElementById('btnAddBox');
-const btnSave = document.getElementById('btnSave');
-const btnCopy = document.getElementById('btnCopy');
-const toastEl = document.getElementById('toast');
+const editHint = $('editHint');
+const editorEl = $('editor');
+const pickScreen = $('pickScreen');
+const editScreen = $('editScreen');
+const doneScreen = $('doneScreen');
+const stepPick = $('stepPick');
+const stepEdit = $('stepEdit');
+const stepDone = $('stepDone');
+const templateGrid = $('templateGrid');
+const presetGrid = $('presetGrid');
+const mineHead = $('mineHead');
+const presetHead = $('presetHead');
+const fileInput = $('fileInput');
+const resultImg = $('resultImg');
+const btnShare = $('btnShare');
+const btnSave = $('btnSave');
+const btnCopy = $('btnCopy');
+const btnBack = $('btnBack');
+const dropOverlay = $('dropOverlay');
+const toastEl = $('toast');
 
 const thumbURLs = new Map(); // templateId -> objectURL
+
+// ---------------- モード切替（ステップフロー） ----------------
+
+function setMode(m) {
+  mode = m;
+  document.body.dataset.mode = m;
+  pickScreen.hidden = m !== 'pick';
+  editScreen.hidden = m !== 'edit';
+  doneScreen.hidden = m !== 'done';
+  syncSteps();
+  if (m === 'pick') renderPickScreen();
+  if (m === 'edit') { renderEditor(); scheduleRender(); }
+}
+
+function syncSteps() {
+  const has = !!state.img;
+  stepEdit.disabled = !has;
+  stepDone.disabled = !has;
+  stepPick.classList.toggle('active', mode === 'pick');
+  stepEdit.classList.toggle('active', mode === 'edit');
+  stepDone.classList.toggle('active', mode === 'done');
+}
+
+stepPick.addEventListener('click', () => setMode('pick'));
+stepEdit.addEventListener('click', () => { if (state.img) setMode('edit'); });
+stepDone.addEventListener('click', () => enterDone());
 
 // ---------------- 描画 ----------------
 
@@ -296,7 +336,6 @@ async function addTemplateFromBlob(blob, name) {
     return;
   }
   state.templates.unshift(tpl);
-  renderTemplateList();
   await loadTemplate(tpl.id);
   toast(`「${tpl.name}」を追加しました`);
 }
@@ -330,18 +369,8 @@ async function loadTemplate(id) {
 
   canvas.width = img.naturalWidth;
   canvas.height = img.naturalHeight;
-  canvas.classList.add('visible');
-  emptyState.style.display = 'none';
 
-  tplNameInput.disabled = false;
-  tplNameInput.value = tpl.name;
-  btnAddBox.disabled = false;
-  btnSave.disabled = false;
-  btnCopy.disabled = false;
-  saveStatusEl.textContent = '';
-
-  renderTemplateList();
-  renderEditor();
+  setMode('edit');
   render();
 }
 
@@ -349,7 +378,12 @@ async function deleteTemplate(id) {
   const tpl = state.templates.find(t => t.id === id);
   if (!tpl) return;
   if (!confirm(`テンプレート「${tpl.name}」を削除しますか？`)) return;
-  await dbDelete(id);
+  try {
+    await dbDelete(id);
+  } catch (err) {
+    toast('削除に失敗しました: ' + err.message, true);
+    return;
+  }
   state.templates = state.templates.filter(t => t.id !== id);
   const url = thumbURLs.get(id);
   if (url) { URL.revokeObjectURL(url); thumbURLs.delete(id); }
@@ -361,24 +395,25 @@ async function deleteTemplate(id) {
     state.imgBlob = null;
     state.boxes = [];
     state.selectedId = null;
-    canvas.classList.remove('visible');
-    emptyState.style.display = '';
-    tplNameInput.value = '';
-    tplNameInput.disabled = true;
-    btnAddBox.disabled = true;
-    btnSave.disabled = true;
-    btnCopy.disabled = true;
-    renderEditor();
-    if (state.templates.length > 0) await loadTemplate(state.templates[0].id);
   }
-  renderTemplateList();
+  renderPickScreen();
+  syncSteps();
+}
+
+function renameTemplate(tpl) {
+  const name = prompt('テンプレート名', tpl.name);
+  if (name == null || !name.trim()) return;
+  tpl.name = name.trim();
+  tpl.updatedAt = Date.now();
+  dbPut(tpl).catch(err => toast('保存に失敗しました: ' + err.message, true));
+  if (state.templateId === tpl.id) state.name = tpl.name;
+  renderTemplateGrid();
 }
 
 // 変更をデバウンスして自動保存
 let saveTimer = null;
 function autoSave() {
   if (!state.templateId) return;
-  saveStatusEl.textContent = '保存中…';
   clearTimeout(saveTimer);
   saveTimer = setTimeout(async () => {
     const tpl = state.templates.find(t => t.id === state.templateId);
@@ -388,150 +423,167 @@ function autoSave() {
     tpl.updatedAt = Date.now();
     try {
       await dbPut(tpl);
-      saveStatusEl.textContent = '保存済み';
     } catch (err) {
-      saveStatusEl.textContent = '';
       toast('自動保存に失敗しました: ' + err.message, true);
     }
   }, 400);
 }
 
-function renderTemplateList() {
-  templateListEl.innerHTML = '';
-  for (const tpl of state.templates) {
-    const item = document.createElement('div');
-    item.className = 'tpl-item' + (tpl.id === state.templateId ? ' active' : '');
+// ---------------- ① えらぶ画面 ----------------
 
-    const img = document.createElement('img');
-    if (!thumbURLs.has(tpl.id)) thumbURLs.set(tpl.id, URL.createObjectURL(tpl.imageBlob));
-    img.src = thumbURLs.get(tpl.id);
-    img.alt = '';
+function renderPickScreen() {
+  renderTemplateGrid();
+  renderPresetGrid();
+}
 
-    const name = document.createElement('span');
-    name.className = 'tpl-name';
-    name.textContent = tpl.name;
+function makeCard({ thumbSrc, name, badge, active, onOpen, onDelete, onRename }) {
+  const card = document.createElement('div');
+  card.className = 'card' + (active ? ' active' : '');
+  card.setAttribute('role', 'button');
+  card.tabIndex = 0;
 
+  const img = document.createElement('img');
+  img.className = 'thumb';
+  img.src = thumbSrc;
+  img.alt = '';
+  img.loading = 'lazy';
+  img.draggable = false;
+  card.appendChild(img);
+
+  const nameEl = document.createElement('div');
+  nameEl.className = 'card-name';
+  nameEl.textContent = name;
+  if (onRename) {
+    nameEl.title = '名前を変更';
+    nameEl.addEventListener('click', e => { e.stopPropagation(); onRename(); });
+  }
+  card.appendChild(nameEl);
+
+  if (badge) {
+    const badgeEl = document.createElement('span');
+    badgeEl.className = 'card-badge';
+    badgeEl.textContent = badge;
+    card.appendChild(badgeEl);
+  }
+  if (onDelete) {
     const del = document.createElement('button');
-    del.className = 'tpl-del';
+    del.type = 'button';
+    del.className = 'card-del';
     del.textContent = '✕';
-    del.title = '削除';
-    del.addEventListener('click', e => { e.stopPropagation(); deleteTemplate(tpl.id); });
+    del.setAttribute('aria-label', '削除');
+    del.addEventListener('click', e => { e.stopPropagation(); onDelete(); });
+    card.appendChild(del);
+  }
 
-    item.append(img, name, del);
-    item.addEventListener('click', () => loadTemplate(tpl.id));
-    templateListEl.appendChild(item);
+  card.addEventListener('click', onOpen);
+  card.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); }
+  });
+  return card;
+}
+
+function renderTemplateGrid() {
+  templateGrid.innerHTML = '';
+  mineHead.hidden = state.templates.length === 0;
+  for (const tpl of state.templates) {
+    if (!thumbURLs.has(tpl.id)) thumbURLs.set(tpl.id, URL.createObjectURL(tpl.imageBlob));
+    templateGrid.appendChild(makeCard({
+      thumbSrc: thumbURLs.get(tpl.id),
+      name: tpl.name,
+      active: tpl.id === state.templateId,
+      onOpen: () => loadTemplate(tpl.id),
+      onDelete: () => deleteTemplate(tpl.id),
+      onRename: () => renameTemplate(tpl),
+    }));
   }
 }
 
-// ---------------- テキスト枠エディタ（右パネル） ----------------
+function renderPresetGrid() {
+  presetGrid.innerHTML = '';
+  presetHead.hidden = presets.length === 0;
+  for (const preset of presets) {
+    presetGrid.appendChild(makeCard({
+      thumbSrc: 'templates/' + encodeURIComponent(preset.file),
+      name: preset.name || preset.file.replace(/\.[^.]+$/, ''),
+      badge: 'preset',
+      onOpen: () => importPreset(preset),
+    }));
+  }
+}
 
-function renderBoxList() {
-  boxListEl.innerHTML = '';
-  if (!state.img) return;
-
-  if (state.boxes.length === 0) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-boxes';
-    empty.innerHTML = 'テキスト枠がありません。<br>画像の上をドラッグするか<br>「＋枠を追加」を押してください。';
-    boxListEl.appendChild(empty);
+async function loadPresets() {
+  // file:// 直開きなど fetch できない環境では黙ってスキップ
+  let manifest;
+  try {
+    const res = await fetch('templates/manifest.json', { cache: 'no-cache' });
+    if (!res.ok) return;
+    manifest = await res.json();
+  } catch {
     return;
   }
-
-  state.boxes.forEach((box, i) => {
-    const item = document.createElement('div');
-    item.className = 'box-item' + (box.id === state.selectedId ? ' selected' : '');
-    item.dataset.boxId = box.id;
-    item.innerHTML = `
-      <textarea placeholder="テキスト">${escapeHTML(box.text)}</textarea>
-      <div class="box-controls">
-        <span class="ctrl">サイズ <input type="number" class="c-size" min="8" max="300" value="${box.fontSize}"></span>
-        <span class="ctrl"><label><input type="checkbox" class="c-vertical" ${box.vertical ? 'checked' : ''}>縦書き</label></span>
-        <span class="ctrl">フォント <select class="c-font">${Object.keys(FONTS).map(k =>
-          `<option value="${k}" ${box.font === k ? 'selected' : ''}>${FONT_LABELS[k]}</option>`).join('')}</select></span>
-        <span class="ctrl"><label><input type="checkbox" class="c-bold" ${box.bold ? 'checked' : ''}>太字</label></span>
-        <span class="ctrl">文字色 <input type="color" class="c-color" value="${box.color}"></span>
-        <span class="ctrl"><label><input type="checkbox" class="c-bg" ${box.bg ? 'checked' : ''}>背景</label><input type="color" class="c-bgcolor" value="${box.bgColor}"></span>
-        <span class="ctrl"><label><input type="checkbox" class="c-outline" ${box.outline ? 'checked' : ''}>縁取り</label><input type="color" class="c-outlinecolor" value="${box.outlineColor}"></span>
-        <span class="ctrl">配置 <select class="c-align" ${box.vertical ? 'disabled' : ''}>
-          <option value="center" ${box.align === 'center' ? 'selected' : ''}>中央</option>
-          <option value="left" ${box.align === 'left' ? 'selected' : ''}>左</option>
-          <option value="right" ${box.align === 'right' ? 'selected' : ''}>右</option>
-        </select></span>
-      </div>
-      <button class="box-del">枠を削除</button>
-    `;
-
-    const q = sel => item.querySelector(sel);
-    const update = (fn) => { fn(); scheduleRender(); autoSave(); };
-
-    item.addEventListener('click', () => {
-      if (state.selectedId !== box.id) {
-        state.selectedId = box.id;
-        updateBoxSelection();
-        scheduleRender();
-      }
-    });
-
-    q('textarea').addEventListener('input', e => update(() => { box.text = e.target.value; }));
-    q('.c-size').addEventListener('input', e => update(() => {
-      box.fontSize = Math.max(8, Math.min(300, Number(e.target.value) || box.fontSize));
-    }));
-    q('.c-vertical').addEventListener('change', e => update(() => {
-      box.vertical = e.target.checked;
-      q('.c-align').disabled = box.vertical;
-    }));
-    q('.c-font').addEventListener('change', e => update(() => { box.font = e.target.value; }));
-    q('.c-bold').addEventListener('change', e => update(() => { box.bold = e.target.checked; }));
-    q('.c-color').addEventListener('input', e => update(() => { box.color = e.target.value; }));
-    q('.c-bg').addEventListener('change', e => update(() => { box.bg = e.target.checked; }));
-    q('.c-bgcolor').addEventListener('input', e => update(() => { box.bgColor = e.target.value; box.bg = true; q('.c-bg').checked = true; }));
-    q('.c-outline').addEventListener('change', e => update(() => { box.outline = e.target.checked; }));
-    q('.c-outlinecolor').addEventListener('input', e => update(() => { box.outlineColor = e.target.value; box.outline = true; q('.c-outline').checked = true; }));
-    q('.c-align').addEventListener('change', e => update(() => { box.align = e.target.value; }));
-    q('.box-del').addEventListener('click', e => {
-      e.stopPropagation();
-      deleteBox(box.id);
-    });
-
-    boxListEl.appendChild(item);
-  });
+  presets = (manifest.templates || []).filter(p => p && p.file);
+  renderPresetGrid();
 }
 
-// 選択状態のハイライトだけ更新（テキスト入力中のフォーカスを壊さない）
-function updateBoxSelection() {
-  for (const el of boxListEl.querySelectorAll('.box-item')) {
-    el.classList.toggle('selected', el.dataset.boxId === state.selectedId);
+async function importPreset(preset) {
+  const id = 'preset:' + preset.file;
+  // 取り込み済みならそれを開く（枠レイアウトを保持）
+  if (state.templates.some(t => t.id === id)) {
+    await loadTemplate(id);
+    return;
   }
-  syncMobileSelection();
+  let blob;
+  try {
+    const res = await fetch('templates/' + encodeURIComponent(preset.file));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    blob = await res.blob();
+  } catch (err) {
+    toast('プリセットの取得に失敗しました: ' + err.message, true);
+    return;
+  }
+  const tpl = {
+    id,
+    name: preset.name || preset.file.replace(/\.[^.]+$/, ''),
+    imageBlob: blob,
+    boxes: [],
+    updatedAt: Date.now(),
+  };
+  try {
+    await dbPut(tpl);
+  } catch (err) {
+    toast('保存に失敗しました: ' + err.message, true);
+    return;
+  }
+  state.templates.unshift(tpl);
+  await loadTemplate(id);
+  toast(`プリセット「${tpl.name}」を取り込みました`);
 }
 
-// デスクトップの右パネルとスマホのボトムエディタを両方更新
-function renderEditor() {
-  renderBoxList();
-  renderMobileEditor();
-}
+// ---------------- ② つくる画面: ボトムエディタ ----------------
 
-// ---------------- テキスト枠エディタ（スマホ用ボトムツールバー） ----------------
+let openTool = null;  // 開いているツールポップオーバー
+let shownId = null;   // エディタが表示している枠（テキスト入力中の作り直し防止）
 
-const mobileEditorEl = document.getElementById('mobileEditor');
-let meOpenTool = null; // スマホエディタで開いているツール
-
-const ME_ICONS = {
+const TOOL_ICONS = {
   size: '<svg viewBox="0 0 24 24"><path d="M4 19 9 5l5 14M6 14h6"/><path d="M18 8v9M15.5 10.5 18 8l2.5 2.5M15.5 14.5 18 17l2.5-2.5"/></svg>',
   font: '<svg viewBox="0 0 24 24"><path d="M5 6h14M12 6v13M9 19h6"/></svg>',
   color: '<svg viewBox="0 0 24 24"><path d="M12 3C8 9 6 12 6 15a6 6 0 0 0 12 0c0-3-2-6-6-12z"/></svg>',
   align: '<svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h16"/></svg>',
   del: '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>',
+  done: '<svg viewBox="0 0 24 24"><path d="M4 12.5 10 18.5 20 6"/></svg>',
 };
 
-// スマホエディタが今表示している枠。選択が変わった時だけ作り直す。
-let meShownId = null;
+function chipLabel(b, i) {
+  const label = (b.text || '').trim().split('\n')[0].slice(0, 6);
+  return label ? `${i + 1}. ${label}` : `枠${i + 1}`;
+}
 
-function renderMobileEditor() {
-  if (!mobileEditorEl) return;
-  mobileEditorEl.innerHTML = '';
-  meShownId = state.selectedId;
+function renderEditor() {
+  editorEl.innerHTML = '';
+  shownId = state.selectedId;
+  openTool = null;
   if (!state.img) return;
+  editHint.hidden = state.boxes.length > 0;
 
   // 枠切替バー（横スクロールのチップ + 追加）
   const bar = document.createElement('div');
@@ -540,8 +592,8 @@ function renderMobileEditor() {
     const chip = document.createElement('button');
     chip.type = 'button';
     chip.className = 'me-chip' + (b.id === state.selectedId ? ' active' : '');
-    const label = (b.text || '').trim().split('\n')[0].slice(0, 6);
-    chip.textContent = label ? `${i + 1}. ${label}` : `枠${i + 1}`;
+    chip.dataset.boxId = b.id;
+    chip.textContent = chipLabel(b, i);
     chip.addEventListener('click', () => {
       state.selectedId = b.id;
       updateBoxSelection();
@@ -552,39 +604,44 @@ function renderMobileEditor() {
   const add = document.createElement('button');
   add.type = 'button';
   add.className = 'me-add';
-  add.setAttribute('aria-label', '枠を追加');
-  add.textContent = '＋';
+  add.textContent = '＋ 枠を追加';
   add.addEventListener('click', addBoxCentered);
   bar.appendChild(add);
-  mobileEditorEl.appendChild(bar);
+  editorEl.appendChild(bar);
 
   const sel = getSelected();
-  if (!sel) {
+
+  // テキスト入力（枠選択中のみ）
+  if (sel) {
+    const ta = document.createElement('textarea');
+    ta.className = 'me-text';
+    ta.placeholder = 'テキストを入力';
+    ta.value = sel.text;
+    ta.addEventListener('input', () => {
+      sel.text = ta.value;
+      scheduleRender();
+      autoSave();
+      const chip = bar.querySelector('.me-chip.active');
+      if (chip) chip.textContent = chipLabel(sel, state.boxes.indexOf(sel));
+    });
+    ta.addEventListener('focus', () => setTool(null));
+    editorEl.appendChild(ta);
+  } else {
     const empty = document.createElement('div');
     empty.className = 'me-empty';
     empty.innerHTML = state.boxes.length
-      ? '上のバーで枠を選ぶか、<br>キャンバスの枠をタップしてください。'
-      : 'テキスト枠がありません。<br>キャンバスをドラッグ／上の ＋ で追加。';
-    mobileEditorEl.appendChild(empty);
-    return;
+      ? '枠をタップして選ぶと文字を編集できます。'
+      : '画像の上をドラッグするか「＋ 枠を追加」で<br>テキスト枠をつくりましょう。';
+    editorEl.appendChild(empty);
   }
-
-  // テキスト入力
-  const ta = document.createElement('textarea');
-  ta.className = 'me-text';
-  ta.placeholder = 'テキストを入力';
-  ta.value = sel.text;
-  ta.addEventListener('input', () => { sel.text = ta.value; scheduleRender(); autoSave(); });
-  ta.addEventListener('focus', () => setTool(null));
-  mobileEditorEl.appendChild(ta);
 
   // ポップオーバー（ツールの詳細設定。開いた時だけ中身を作る）
   const pop = document.createElement('div');
   pop.className = 'me-popover';
   pop.hidden = true;
-  mobileEditorEl.appendChild(pop);
+  editorEl.appendChild(pop);
 
-  // ボトムツールバー
+  // ツールバー
   const tb = document.createElement('div');
   tb.className = 'me-toolbar';
   const tools = [
@@ -599,29 +656,33 @@ function renderMobileEditor() {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'me-tool' + (t.danger ? ' danger' : '');
-    btn.dataset.tool = t.key;
-    btn.innerHTML = `<span class="me-tool-ico">${ME_ICONS[t.key]}</span><span class="me-tool-label">${t.label}</span>`;
+    btn.disabled = !sel;
+    btn.innerHTML = `<span class="me-tool-ico">${TOOL_ICONS[t.key]}</span><span class="me-tool-label">${t.label}</span>`;
     btn.addEventListener('click', () => {
       if (t.key === 'del') { setTool(null); deleteBox(sel.id); return; }
-      setTool(meOpenTool === t.key ? null : t.key);
+      setTool(openTool === t.key ? null : t.key);
     });
     toolBtns[t.key] = btn;
     tb.appendChild(btn);
   });
-  mobileEditorEl.appendChild(tb);
+  const done = document.createElement('button');
+  done.type = 'button';
+  done.className = 'me-tool primary';
+  done.innerHTML = `<span class="me-tool-ico">${TOOL_ICONS.done}</span><span class="me-tool-label">できた！</span>`;
+  done.addEventListener('click', () => enterDone());
+  tb.appendChild(done);
+  editorEl.appendChild(tb);
 
   const upd = () => { scheduleRender(); autoSave(); };
 
   function setTool(key) {
-    meOpenTool = key;
+    openTool = key;
     for (const k of Object.keys(toolBtns)) toolBtns[k].classList.toggle('active', k === key);
     if (!key) { pop.hidden = true; pop.innerHTML = ''; return; }
     pop.innerHTML = buildPopover(key, sel);
     wirePopover(key, pop, sel, upd);
     pop.hidden = false;
   }
-
-  meOpenTool = null;
 }
 
 function buildPopover(key, b) {
@@ -694,20 +755,19 @@ function wirePopover(key, pop, b, upd) {
   }
 }
 
-// 選択が変わった時にスマホエディタを追従（テキスト入力中は作り直さない）
-function syncMobileSelection() {
-  if (!mobileEditorEl) return;
-  if (state.selectedId === meShownId) {
-    // 同じ枠 → チップのハイライトだけ更新（フォーカス維持）
-    mobileEditorEl.querySelectorAll('.me-chip').forEach((c, i) =>
-      c.classList.toggle('active', state.boxes[i] && state.boxes[i].id === state.selectedId));
+// 選択が変わった時にエディタを追従（テキスト入力中は作り直さない）
+function updateBoxSelection() {
+  if (state.selectedId === shownId) {
+    editorEl.querySelectorAll('.me-chip').forEach(c =>
+      c.classList.toggle('active', c.dataset.boxId === state.selectedId));
     return;
   }
-  renderMobileEditor();
+  renderEditor();
 }
 
-function escapeHTML(s) {
-  return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+function focusEditorText() {
+  const ta = editorEl.querySelector('.me-text');
+  if (ta) { ta.focus(); ta.select(); }
 }
 
 function addBoxCentered() {
@@ -720,8 +780,7 @@ function addBoxCentered() {
   renderEditor();
   scheduleRender();
   autoSave();
-  setMobileTab('boxes');
-  focusSelectedTextarea();
+  focusEditorText();
 }
 
 function deleteBox(id) {
@@ -730,11 +789,6 @@ function deleteBox(id) {
   renderEditor();
   scheduleRender();
   autoSave();
-}
-
-function focusSelectedTextarea() {
-  const item = boxListEl.querySelector(`.box-item[data-box-id="${state.selectedId}"] textarea`);
-  if (item) { item.focus(); item.select(); }
 }
 
 // ---------------- キャンバス操作（移動・リサイズ・新規作成） ----------------
@@ -841,7 +895,7 @@ canvas.addEventListener('pointermove', e => {
   scheduleRender();
 });
 
-canvas.addEventListener('pointerup', e => {
+canvas.addEventListener('pointerup', () => {
   if (!drag) return;
   const d = drag;
   drag = null;
@@ -860,22 +914,27 @@ canvas.addEventListener('pointerup', e => {
     renderEditor();
     scheduleRender();
     autoSave();
-    setMobileTab('boxes');
-    focusSelectedTextarea();
+    focusEditorText();
     return;
   }
   autoSave();
 });
 
 canvas.addEventListener('dblclick', () => {
-  if (state.selectedId) focusSelectedTextarea();
+  if (state.selectedId) focusEditorText();
 });
 
-// キーボード: Delete で削除、矢印キーで移動、Esc で選択解除
+// キーボード: Delete で削除、矢印キーで移動、Esc で戻る/選択解除
 document.addEventListener('keydown', e => {
   const tag = document.activeElement && document.activeElement.tagName;
   const typing = tag === 'TEXTAREA' || tag === 'INPUT' || tag === 'SELECT';
   if (typing) return;
+
+  if (mode === 'done' && e.key === 'Escape') {
+    setMode('edit');
+    return;
+  }
+  if (mode !== 'edit') return;
   const sel = getSelected();
   if (!sel) return;
 
@@ -907,14 +966,30 @@ fileInput.addEventListener('change', async () => {
   fileInput.value = '';
 });
 
-canvasWrap.addEventListener('dragover', e => {
+// どの画面でもドロップで追加できるように window 全体で受ける
+function dragHasFiles(e) {
+  return e.dataTransfer && [...(e.dataTransfer.types || [])].includes('Files');
+}
+let dragDepth = 0;
+window.addEventListener('dragenter', e => {
+  if (!dragHasFiles(e)) return;
   e.preventDefault();
-  canvasWrap.classList.add('dragover');
+  dragDepth++;
+  dropOverlay.hidden = false;
 });
-canvasWrap.addEventListener('dragleave', () => canvasWrap.classList.remove('dragover'));
-canvasWrap.addEventListener('drop', async e => {
+window.addEventListener('dragover', e => {
+  if (dragHasFiles(e)) e.preventDefault();
+});
+window.addEventListener('dragleave', e => {
+  if (!dragHasFiles(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) dropOverlay.hidden = true;
+});
+window.addEventListener('drop', async e => {
+  if (!dragHasFiles(e)) return;
   e.preventDefault();
-  canvasWrap.classList.remove('dragover');
+  dragDepth = 0;
+  dropOverlay.hidden = true;
   for (const file of e.dataTransfer.files) {
     if (file.type.startsWith('image/')) {
       await addTemplateFromBlob(file, file.name.replace(/\.[^.]+$/, ''));
@@ -934,7 +1009,10 @@ document.addEventListener('paste', async e => {
   }
 });
 
-// ---------------- 出力 ----------------
+// ---------------- ③ できた画面: 出力 ----------------
+
+let resultBlob = null;
+let resultURL = null;
 
 function exportBlob() {
   return new Promise((resolve, reject) => {
@@ -947,72 +1025,87 @@ function exportBlob() {
   });
 }
 
-btnSave.addEventListener('click', async () => {
+function makeShareFile(blob) {
+  return new File([blob], `${state.name || 'meme'}.png`, { type: 'image/png' });
+}
+
+function canShareFile(blob) {
   try {
-    const blob = await exportBlob();
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${state.name || 'meme'}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.png`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-    toast('PNGを保存しました');
+    return !!(navigator.canShare && navigator.canShare({ files: [makeShareFile(blob)] }));
+  } catch {
+    return false;
+  }
+}
+
+async function enterDone() {
+  if (!state.img) return;
+  let blob;
+  try {
+    blob = await exportBlob();
   } catch (err) {
     toast(err.message, true);
+    return;
+  }
+  resultBlob = blob;
+  if (resultURL) URL.revokeObjectURL(resultURL);
+  resultURL = URL.createObjectURL(blob);
+  resultImg.src = resultURL;
+  const sharable = canShareFile(blob);
+  btnShare.hidden = !sharable;
+  btnSave.classList.toggle('primary', !sharable);
+  setMode('done');
+}
+
+function downloadBlob(blob) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${state.name || 'meme'}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.png`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+btnShare.addEventListener('click', async () => {
+  if (!resultBlob) return;
+  try {
+    await navigator.share({ files: [makeShareFile(resultBlob)] });
+  } catch (err) {
+    if (err && err.name !== 'AbortError') toast('共有できませんでした: ' + err.message, true);
   }
 });
 
+btnSave.addEventListener('click', () => {
+  if (!resultBlob) return;
+  downloadBlob(resultBlob);
+  toast('PNGを保存しました');
+});
+
 btnCopy.addEventListener('click', async () => {
+  if (!resultBlob) return;
   try {
     if (!navigator.clipboard || !window.ClipboardItem) {
       throw new Error('このブラウザは画像コピーに未対応です（PNG保存を使ってください）');
     }
-    render(true);
-    const item = new ClipboardItem({
-      'image/png': new Promise(resolve => canvas.toBlob(resolve, 'image/png')),
-    });
-    await navigator.clipboard.write([item]);
-    render();
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': resultBlob })]);
     toast('クリップボードにコピーしました');
   } catch (err) {
-    render();
     toast('コピーに失敗しました: ' + err.message, true);
   }
 });
 
-// Cmd/Ctrl+S でPNG保存
+btnBack.addEventListener('click', () => setMode('edit'));
+
+// Cmd/Ctrl+S で即PNG保存
 document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 's') {
     e.preventDefault();
-    if (!btnSave.disabled) btnSave.click();
+    if (!state.img) return;
+    exportBlob()
+      .then(blob => { downloadBlob(blob); toast('PNGを保存しました'); })
+      .catch(err => toast(err.message, true));
   }
 });
 
-// ---------------- その他UI ----------------
-
-tplNameInput.addEventListener('input', () => {
-  state.name = tplNameInput.value;
-  autoSave();
-  const tpl = state.templates.find(t => t.id === state.templateId);
-  if (tpl) {
-    tpl.name = state.name;
-    const active = templateListEl.querySelector('.tpl-item.active .tpl-name');
-    if (active) active.textContent = state.name;
-  }
-});
-
-btnAddBox.addEventListener('click', addBoxCentered);
-
-// ---------------- モバイル用パネル切替タブ ----------------
-const mobileTabsEl = document.getElementById('mobileTabs');
-function setMobileTab(which) {
-  document.body.classList.toggle('m-tab-boxes', which === 'boxes');
-  document.body.classList.toggle('m-tab-templates', which === 'templates');
-  mobileTabsEl.querySelectorAll('button').forEach(b =>
-    b.classList.toggle('active', b.dataset.tab === which));
-}
-mobileTabsEl.querySelectorAll('button').forEach(b =>
-  b.addEventListener('click', () => setMobileTab(b.dataset.tab)));
-setMobileTab('templates');
+// ---------------- トースト ----------------
 
 let toastTimer = null;
 function toast(msg, isError = false) {
@@ -1023,94 +1116,15 @@ function toast(msg, isError = false) {
   toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2600);
 }
 
-// ---------------- プリセット（templates/manifest.json） ----------------
-
-const presetSection = document.getElementById('presetSection');
-const presetListEl = document.getElementById('presetList');
-
-async function loadPresets() {
-  // file:// 直開きなど fetch できない環境では黙ってスキップ
-  let manifest;
-  try {
-    const res = await fetch('templates/manifest.json', { cache: 'no-cache' });
-    if (!res.ok) return;
-    manifest = await res.json();
-  } catch {
-    return;
-  }
-  const presets = (manifest.templates || []).filter(p => p && p.file);
-  if (presets.length === 0) return;
-
-  presetSection.hidden = false;
-  presetListEl.innerHTML = '';
-  for (const preset of presets) {
-    const item = document.createElement('div');
-    item.className = 'tpl-item';
-
-    const img = document.createElement('img');
-    img.src = 'templates/' + encodeURIComponent(preset.file);
-    img.alt = '';
-    img.loading = 'lazy';
-
-    const name = document.createElement('span');
-    name.className = 'tpl-name';
-    name.textContent = preset.name || preset.file.replace(/\.[^.]+$/, '');
-
-    const badge = document.createElement('span');
-    badge.className = 'tpl-badge';
-    badge.textContent = 'preset';
-
-    item.append(img, name, badge);
-    item.addEventListener('click', () => importPreset(preset));
-    presetListEl.appendChild(item);
-  }
-}
-
-async function importPreset(preset) {
-  const id = 'preset:' + preset.file;
-  // 取り込み済みならそれを開く（枠レイアウトを保持）
-  if (state.templates.some(t => t.id === id)) {
-    await loadTemplate(id);
-    return;
-  }
-  let blob;
-  try {
-    const res = await fetch('templates/' + encodeURIComponent(preset.file));
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    blob = await res.blob();
-  } catch (err) {
-    toast('プリセットの取得に失敗しました: ' + err.message, true);
-    return;
-  }
-  const tpl = {
-    id,
-    name: preset.name || preset.file.replace(/\.[^.]+$/, ''),
-    imageBlob: blob,
-    boxes: [],
-    updatedAt: Date.now(),
-  };
-  try {
-    await dbPut(tpl);
-  } catch (err) {
-    toast('保存に失敗しました: ' + err.message, true);
-    return;
-  }
-  state.templates.unshift(tpl);
-  renderTemplateList();
-  await loadTemplate(id);
-  toast(`プリセット「${tpl.name}」を取り込みました`);
-}
-
 // ---------------- 初期化 ----------------
 
 (async function init() {
   try {
     db = await openDB();
     state.templates = (await dbAll()).sort((a, b) => b.updatedAt - a.updatedAt);
-    renderTemplateList();
-    if (state.templates.length > 0) await loadTemplate(state.templates[0].id);
   } catch (err) {
     toast('初期化に失敗しました: ' + err.message, true);
   }
+  setMode('pick');
   loadPresets();
 })();
