@@ -56,7 +56,11 @@
   <section class="screen" id="editScreen" hidden>
     <div id="canvasWrap">
       <canvas id="canvas"></canvas>
-      <div class="hint-bubble" id="editHint" hidden>なにもない所をドラッグして枠を追加</div>
+      <div class="hint-bubble" id="editHint" hidden>なにもない所をドラッグして枠を追加／二本指で拡大</div>
+      <button type="button" class="view-reset" id="btnResetView" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3H5a2 2 0 0 0-2 2v4M15 3h4a2 2 0 0 1 2 2v4M9 21H5a2 2 0 0 1-2-2v-4M15 21h4a2 2 0 0 0 2-2v-4"/></svg>
+        全体表示
+      </button>
     </div>
     <div id="editor"></div>
   </section>

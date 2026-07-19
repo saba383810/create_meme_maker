@@ -104,6 +104,8 @@ function getSelected() {
 const $ = id => document.getElementById(id);
 const canvas = $('canvas');
 const ctx = canvas.getContext('2d');
+const canvasWrap = $('canvasWrap');
+const btnResetView = $('btnResetView');
 const editHint = $('editHint');
 const editorEl = $('editor');
 const pickScreen = $('pickScreen');
@@ -369,6 +371,7 @@ async function loadTemplate(id) {
 
   canvas.width = img.naturalWidth;
   canvas.height = img.naturalHeight;
+  resetView();
 
   setMode('edit');
   render();
@@ -791,9 +794,87 @@ function deleteBox(id) {
   autoSave();
 }
 
-// ---------------- キャンバス操作（移動・リサイズ・新規作成） ----------------
+// ---------------- ビュー（二本指ピンチで拡大・パン） ----------------
+// CSS transform でキャンバス表示だけを拡大する。getBoundingClientRect は
+// transform 込みの値を返すため、canvasPos / displayScale はそのまま追従する。
+
+const view = { scale: 1, tx: 0, ty: 0 };
+const MAX_SCALE = 6;
+
+function applyView() {
+  canvas.style.transform = `translate(${view.tx}px, ${view.ty}px) scale(${view.scale})`;
+  btnResetView.hidden = view.scale === 1;
+}
+
+function resetView() {
+  view.scale = 1;
+  view.tx = 0;
+  view.ty = 0;
+  applyView();
+}
+
+// transform 適用前のレイアウト上の左上（transform の基準点）
+function layoutOrigin() {
+  const rect = canvas.getBoundingClientRect();
+  return { x: rect.left - view.tx, y: rect.top - view.ty };
+}
+
+// キャンバスが表示領域から迷子にならないように平行移動を制限する
+function clampView(L) {
+  const stage = canvasWrap.getBoundingClientRect();
+  const clampAxis = (pos, size, stagePos, stageSize) => {
+    // 表示領域より小さい間は領域内に収め、大きい間は隙間ができないように挟む
+    const min = size <= stageSize ? stagePos : stagePos + stageSize - size;
+    const max = size <= stageSize ? stagePos + stageSize - size : stagePos;
+    return Math.min(max, Math.max(min, pos));
+  };
+  const w = canvas.offsetWidth * view.scale;
+  const h = canvas.offsetHeight * view.scale;
+  view.tx = clampAxis(L.x + view.tx, w, stage.left, stage.width) - L.x;
+  view.ty = clampAxis(L.y + view.ty, h, stage.top, stage.height) - L.y;
+}
+
+// 画面上の点 (cx, cy) の直下を固定したままズームする
+function zoomAt(cx, cy, scale) {
+  const next = Math.min(MAX_SCALE, Math.max(1, scale));
+  if (next === 1) { resetView(); return; }
+  const rect = canvas.getBoundingClientRect();
+  const L = { x: rect.left - view.tx, y: rect.top - view.ty };
+  const px = (cx - rect.left) / view.scale;
+  const py = (cy - rect.top) / view.scale;
+  view.scale = next;
+  view.tx = cx - L.x - next * px;
+  view.ty = cy - L.y - next * py;
+  clampView(L);
+  applyView();
+}
+
+btnResetView.addEventListener('click', resetView);
+
+// PC: トラックパッドのピンチ（Ctrl+ホイールとして届く）と Ctrl+ホイール
+canvasWrap.addEventListener('wheel', e => {
+  if (!state.img || !e.ctrlKey) return;
+  e.preventDefault();
+  zoomAt(e.clientX, e.clientY, view.scale * Math.exp(-e.deltaY * 0.01));
+}, { passive: false });
+
+// デスクトップSafariのトラックパッドピンチは gesture イベントでのみ届く
+// （タッチ端末では pointer イベント側のピンチと二重処理になるため付けない）
+if (!COARSE_POINTER && typeof GestureEvent !== 'undefined') {
+  let gestureBase = 1;
+  canvasWrap.addEventListener('gesturestart', e => { e.preventDefault(); gestureBase = view.scale; });
+  canvasWrap.addEventListener('gesturechange', e => {
+    e.preventDefault();
+    if (state.img) zoomAt(e.clientX, e.clientY, gestureBase * e.scale);
+  });
+  canvasWrap.addEventListener('gestureend', e => e.preventDefault());
+}
+
+// ---------------- キャンバス操作（移動・リサイズ・新規作成・ピンチ） ----------------
 
 let drag = null; // {mode, start, orig, handle, created}
+const activePointers = new Map(); // pointerId -> {x, y}
+let pinch = null; // {d0, m0, L, scale0, tx0, ty0}
 
 function canvasPos(e) {
   const rect = canvas.getBoundingClientRect();
@@ -821,10 +902,65 @@ function hitBox(p) {
 
 const HANDLE_CURSORS = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize' };
 
-canvas.addEventListener('pointerdown', e => {
+function pointerDist() {
+  const [a, b] = [...activePointers.values()];
+  return Math.hypot(a.x - b.x, a.y - b.y) || 1;
+}
+
+function pointerMid() {
+  const [a, b] = [...activePointers.values()];
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+function startPinch() {
+  // 枠ドラッグ中に2本目の指が触れたら、枠を動かさずピンチへ切り替える
+  if (drag) {
+    if (drag.mode === 'create') {
+      state.boxes = state.boxes.filter(b => b.id !== drag.created);
+      state.selectedId = null;
+      updateBoxSelection();
+    } else {
+      const sel = getSelected();
+      if (sel) Object.assign(sel, { x: drag.orig.x, y: drag.orig.y, w: drag.orig.w, h: drag.orig.h });
+    }
+    drag = null;
+    scheduleRender();
+  }
+  pinch = {
+    d0: pointerDist(),
+    m0: pointerMid(),
+    L: layoutOrigin(),
+    scale0: view.scale,
+    tx0: view.tx,
+    ty0: view.ty,
+  };
+}
+
+function movePinch() {
+  const m1 = pointerMid();
+  const next = Math.min(MAX_SCALE, Math.max(1, pinch.scale0 * pointerDist() / pinch.d0));
+  // ピンチ開始時に中点の直下にあったコンテンツ点を、現在の中点に追従させる
+  const px = (pinch.m0.x - pinch.L.x - pinch.tx0) / pinch.scale0;
+  const py = (pinch.m0.y - pinch.L.y - pinch.ty0) / pinch.scale0;
+  view.scale = next;
+  view.tx = m1.x - pinch.L.x - next * px;
+  view.ty = m1.y - pinch.L.y - next * py;
+  clampView(pinch.L);
+  applyView();
+}
+
+canvasWrap.addEventListener('pointerdown', e => {
   if (!state.img || e.button !== 0) return;
+  if (e.target.closest('.view-reset')) return; // リセットボタンはそのまま押させる
   e.preventDefault();
-  canvas.setPointerCapture(e.pointerId);
+  canvasWrap.setPointerCapture(e.pointerId);
+  activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+  // 2本目の指でピンチ開始（余白に落ちた指も起点にできる）
+  if (activePointers.size === 2) { startPinch(); return; }
+  if (activePointers.size > 2 || pinch) return;
+  if (e.target !== canvas) return; // 余白のシングルタップは枠操作の対象外
+
   const p = canvasPos(e);
 
   const sel = getSelected();
@@ -856,8 +992,13 @@ canvas.addEventListener('pointerdown', e => {
   scheduleRender();
 });
 
-canvas.addEventListener('pointermove', e => {
+canvasWrap.addEventListener('pointermove', e => {
   if (!state.img) return;
+  if (activePointers.has(e.pointerId)) activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pinch) {
+    if (activePointers.size >= 2) movePinch();
+    return;
+  }
   const p = canvasPos(e);
 
   if (!drag) {
@@ -895,15 +1036,25 @@ canvas.addEventListener('pointermove', e => {
   scheduleRender();
 });
 
-canvas.addEventListener('pointerup', () => {
+function releasePointer(e, cancelled) {
+  activePointers.delete(e.pointerId);
+
+  if (pinch) {
+    if (activePointers.size < 2) {
+      pinch = null;
+      if (view.scale <= 1) resetView(); // 最小倍率でのパンずれを戻す
+    }
+    return;
+  }
   if (!drag) return;
   const d = drag;
   drag = null;
 
   if (d.mode === 'create') {
     const box = state.boxes.find(b => b.id === d.created);
-    if (box && (box.w < 15 || box.h < 15)) {
-      // クリックのみ → 作成キャンセル（選択解除として扱う）
+    if (!box) return;
+    if (cancelled || box.w < 15 || box.h < 15) {
+      // クリックのみ／中断 → 作成キャンセル（選択解除として扱う）
       state.boxes = state.boxes.filter(b => b.id !== d.created);
       state.selectedId = null;
       updateBoxSelection();
@@ -918,7 +1069,10 @@ canvas.addEventListener('pointerup', () => {
     return;
   }
   autoSave();
-});
+}
+
+canvasWrap.addEventListener('pointerup', e => releasePointer(e, false));
+canvasWrap.addEventListener('pointercancel', e => releasePointer(e, true));
 
 canvas.addEventListener('dblclick', () => {
   if (state.selectedId) focusEditorText();
